@@ -10,7 +10,7 @@ public static class ScrapeJob
     /// <paramref name="url"/> is any MTGTop8 archetype page URL as copied from the browser
     /// (see <see cref="MtgTop8Url.Parse"/>); its filters apply to every listing page.
     /// </summary>
-    public static Dataset Run(string url, string outDir, int pages = 50, int minPlayers = 0, double delaySeconds = 1.5)
+    public static void Run(string url, string outDir, int pages = 50, int minPlayers = 0, double delaySeconds = 1.5)
     {
         var (uri, format) = MtgTop8Url.Parse(url);
         Directory.CreateDirectory(outDir);
@@ -70,8 +70,6 @@ public static class ScrapeJob
         Console.WriteLine("Flag summary:");
         foreach (var g in decks.GroupBy(d => d.Flags == "" ? "ok" : d.Flags).OrderByDescending(g => g.Count()))
             Console.WriteLine($"  {g.Count(),4}  {g.Key}");
-
-        return new Dataset { Decks = decks, Cards = cards };
     }
 
     /// <summary>LLM-friendly block: one header per deck, cards grouped by type.</summary>

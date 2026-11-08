@@ -14,6 +14,10 @@ public sealed class ScoredDeck
     public double LnField { get; init; }
     public double PlacementWeight { get; init; }
     public double C { get; init; }
+    /// <summary>Recency weight 0.5^(age / half-life), age measured from the newest deck; 1 when recency weighting is off.</summary>
+    public double Recency { get; set; } = 1;
+    /// <summary>C × Recency: the deck's weight in Inclusion, Density and Value.</summary>
+    public double W => C * Recency;
     public string Archetype { get; set; } = "";
     public double CreatureDensity { get; set; }
     public double SpellDensity { get; set; }
@@ -34,6 +38,14 @@ public sealed class CardMetric
     public required string Card { get; init; }
     public required string Section { get; init; }
     public int DecksPresent { get; init; }
+    /// <summary>Decks that could have played the card (all decks unless availability windows are on).</summary>
+    public int WindowDecks { get; init; }
+    /// <summary>Start of the card's window; null when windows are off or the card predates every deck.</summary>
+    public DateOnly? AvailableFrom { get; init; }
+    /// <summary>"Scryfall" or "first seen" (where <see cref="AvailableFrom"/> came from).</summary>
+    public string AvailableSource { get; init; } = "";
+    /// <summary>True when the window is shorter than the dataset, i.e. the card is newer than some decks.</summary>
+    public bool IsWindowed { get; init; }
     public double Popularity { get; init; }
     public double Inclusion { get; init; }
     public double Density { get; init; }
@@ -97,4 +109,18 @@ public sealed class AnalysisResult
     public List<StructureRow> Structure { get; } = new();
     public StatSummary Summary { get; } = new();
     public int EffectiveFloor { get; set; }
+    /// <summary>Cards whose window is shorter than the dataset (newer than some decks).</summary>
+    public int WindowedCards { get; set; }
+
+    /// <summary>
+    /// Decks a card needs to count as stable: the floor, scaled down in proportion to a short window,
+    /// but never below <see cref="AnalysisSettings.WindowMinDecks"/> (or the floor itself, if smaller).
+    /// </summary>
+    public int CardFloor(CardMetric c, int floor)
+    {
+        int n = Decks.Count;
+        if (!c.IsWindowed || n == 0) return floor;
+        int scaled = (int)Math.Ceiling(floor * (double)c.WindowDecks / n);
+        return Math.Max(Math.Min(floor, Settings.WindowMinDecks), scaled);
+    }
 }

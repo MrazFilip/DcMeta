@@ -11,18 +11,25 @@ public sealed class MetaAnalyzer
 {
     readonly AnalysisSettings _s;
     readonly Dictionary<string, HashSet<string>>? _roles;
+    readonly Dictionary<string, DateOnly> _releaseDates;
+    readonly Dictionary<string, (DateOnly From, string Source)> _availableFrom = new();
 
-    public MetaAnalyzer(AnalysisSettings settings, Dictionary<string, HashSet<string>>? roles = null)
+    /// <param name="releaseDates">Card → first release date (e.g. from Scryfall). Only used with availability windows;
+    /// cards missing from it fall back to the first date they appear in the data.</param>
+    public MetaAnalyzer(AnalysisSettings settings, Dictionary<string, HashSet<string>>? roles = null,
+                        IReadOnlyDictionary<string, DateOnly>? releaseDates = null)
     {
         _s = settings;
         _roles = roles is { Count: > 0 } ? roles : null;
+        _releaseDates = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var (card, date) in releaseDates ?? new Dictionary<string, DateOnly>())
+            _releaseDates[NormalizeName(card)] = date;
     }
 
     public AnalysisResult Run(Dataset data)
     {
         var r = new AnalysisResult { Settings = _s, Data = data, HasRoles = _roles is not null };
 
-        // Merge duplicate (deck, card) rows and drop commander entries.
         var cardsByDeck = data.Cards
             .Where(c => c.Section != Sections.Commander)
             .GroupBy(c => (c.DeckId, Card: NormalizeName(c.Card)))
@@ -31,8 +38,10 @@ public sealed class MetaAnalyzer
 
         ScoreDecks(r, cardsByDeck);
         if (r.Decks.Count == 0) return r;
+        if (_s.RecencyHalfLifeDays is double hl && hl > 0) ApplyRecency(r, hl);
 
         AssignArchetypes(r, cardsByDeck);
+        if (_s.AvailabilityWindows) ComputeAvailability(r, cardsByDeck);
 
         var modeSection = ModeSections(r.Decks, cardsByDeck);
         r.Cards = ComputeCardMetrics(r.Decks, cardsByDeck, modeSection);
@@ -41,6 +50,7 @@ public sealed class MetaAnalyzer
         var high = r.Decks.Where(d => (d.Deck.FieldSize ?? 0) >= _s.HighFieldThreshold).ToList();
         r.HighFieldDecks = high.Count;
         r.CardsHighField = ComputeCardMetrics(high, cardsByDeck, modeSection);
+        r.WindowedCards = r.Cards.Count(c => c.IsWindowed);
 
         BuildRecommended(r, cardsByDeck, modeSection);
         BuildCutList(r);
@@ -89,6 +99,21 @@ public sealed class MetaAnalyzer
         }
     }
 
+    /// <summary>Recency = 0.5^(days before the newest deck / half-life). Undated decks keep weight 1.</summary>
+    static void ApplyRecency(AnalysisResult r, double halfLifeDays)
+    {
+        var dates = r.Decks.Select(d => d.Deck.ParsedDate).OfType<DateOnly>().ToList();
+        if (dates.Count == 0)
+        {
+            r.RecommendedNotes.Add("Recency weighting is on, but no deck has a readable date; all decks count equally.");
+            return;
+        }
+        DateOnly newest = dates.Max();
+        foreach (var d in r.Decks)
+            if (d.Deck.ParsedDate is { } dt)
+                d.Recency = Math.Pow(0.5, (newest.DayNumber - dt.DayNumber) / halfLifeDays);
+    }
+
     // =================================================================== 2. Archetypes
     void AssignArchetypes(AnalysisResult r, ILookup<string, CardEntry> cardsByDeck)
     {
@@ -128,7 +153,6 @@ public sealed class MetaAnalyzer
         }
         else
         {
-            // Standardize the four structural signals, then 2-means seeded by the creature split.
             var raw = r.Decks.Select(d => new[] { d.CreatureDensity, d.SpellDensity, d.InteractionDensity ?? 0, d.VelocityDensity ?? 0 }).ToList();
             points = Standardize(raw);
             labels = Stats.KMeans(points, labels, 2);
@@ -196,6 +220,33 @@ public sealed class MetaAnalyzer
         }
     }
 
+    // =================================================================== Availability windows
+    /// <summary>
+    /// Each card's window starts at its release date when known, else at the first included deck that plays it.
+    /// Cards available before the oldest deck get no entry (their window is the whole dataset).
+    /// </summary>
+    void ComputeAvailability(AnalysisResult r, ILookup<string, CardEntry> cardsByDeck)
+    {
+        var dated = r.Decks.Where(d => d.Deck.ParsedDate is not null).ToList();
+        if (dated.Count == 0)
+        {
+            r.RecommendedNotes.Add("Availability windows are on, but no deck has a readable date; every card uses the whole dataset.");
+            return;
+        }
+        DateOnly oldest = dated.Min(d => d.Deck.ParsedDate!.Value);
+
+        var firstSeen = dated
+            .SelectMany(d => cardsByDeck[d.Deck.DeckId].Select(c => (c.Card, Date: d.Deck.ParsedDate!.Value)))
+            .GroupBy(x => x.Card)
+            .ToDictionary(g => g.Key, g => g.Min(x => x.Date));
+
+        foreach (var (card, seen) in firstSeen)
+        {
+            var (from, source) = _releaseDates.TryGetValue(card, out var rel) ? (rel, "Scryfall") : (seen, "first seen");
+            if (from > oldest) _availableFrom[card] = (from, source);
+        }
+    }
+
     // =================================================================== 3./4. Card metrics
     static Dictionary<string, string> ModeSections(List<ScoredDeck> decks, ILookup<string, CardEntry> cardsByDeck)
     {
@@ -213,7 +264,10 @@ public sealed class MetaAnalyzer
                                                IReadOnlyDictionary<string, string> modeSection)
     {
         if (decks.Count == 0) return new();
-        double totalC = decks.Sum(d => d.C);
+        // Value side (Inclusion, Density) uses W = C × recency weight; Avg_C stays on plain C, so it keeps
+        // meaning "how strong are the decks that play this card". Without --half-life, W = C.
+        double totalC = decks.Sum(d => d.W);
+        double meanW = decks.Average(d => d.W);
         double meanC = decks.Average(d => d.C);
         int n = decks.Count;
 
@@ -223,18 +277,40 @@ public sealed class MetaAnalyzer
             .Select(g =>
             {
                 var present = g.GroupBy(x => x.Deck.Deck.DeckId).Select(x => (x.First().Deck, Qty: x.Sum(y => y.Qty))).ToList();
-                double incl = present.Sum(p => p.Deck.C);
+                double incl = present.Sum(p => p.Deck.W);
+                double sumC = present.Sum(p => p.Deck.C);
                 var top = present.OrderByDescending(p => p.Deck.C).Take(3)
                     .Select(p => $"{p.Deck.Deck.Label} C={p.Deck.C.ToString("0.00", CultureInfo.InvariantCulture)}");
+
+                // Window: decks dated on/after the card became available. Undated decks and decks that
+                // actually play the card always count (guards against a wrong or late release date).
+                int windowN = n;
+                double windowC = totalC, density = totalC == 0 ? 0 : incl / totalC;
+                bool hasWindow = _availableFrom.TryGetValue(g.Key, out var avail);
+                if (hasWindow)
+                {
+                    var ids = present.Select(p => p.Deck.Deck.DeckId).ToHashSet();
+                    var window = decks.Where(d => d.Deck.ParsedDate is not { } dt || dt >= avail.From || ids.Contains(d.Deck.DeckId)).ToList();
+                    windowN = window.Count;
+                    windowC = window.Sum(d => d.W);
+                    // Shrink: k pseudo-decks of average weight at the card's whole-dataset rate, so 5/5 decks
+                    // ranks high but below 80/100.
+                    double k = _s.WindowShrinkK * meanW;
+                    if (windowN < n) density = windowC + k == 0 ? 0 : (incl + k * density) / (windowC + k);
+                }
                 return new CardMetric
                 {
                     Card = g.Key,
-                    Section = modeSection.TryGetValue(g.Key, out var s) ? s : Sections.Unknown,
+                    Section = modeSection.GetValueOrDefault(g.Key, Sections.Unknown),
                     DecksPresent = present.Count,
-                    Popularity = present.Count / (double)n,
+                    WindowDecks = windowN,
+                    AvailableFrom = hasWindow ? avail.From : null,
+                    AvailableSource = hasWindow ? avail.Source : "",
+                    IsWindowed = windowN < n,
+                    Popularity = present.Count / (double)windowN,
                     Inclusion = incl,
-                    Density = totalC == 0 ? 0 : incl / totalC,
-                    AvgC = incl / present.Count,
+                    Density = density,
+                    AvgC = sumC / present.Count,
                     MedianQty = Stats.Median(present.Select(p => (double)p.Qty)),
                     TopExamples = string.Join(" | ", top),
                     CValues = present.Select(p => p.Deck.C).ToList(),
@@ -246,7 +322,10 @@ public sealed class MetaAnalyzer
         double wSum = _s.InclusionWeight + _s.DensityWeight;
         foreach (var c in list)
         {
-            c.InclusionNorm = maxIncl == 0 ? 0 : c.Inclusion / maxIncl;
+            // With windows, raw Inclusion still sums C over the whole dataset (penalising new cards), so the
+            // normalized column uses window-projected inclusion (Density × total C) instead — i.e. Density_norm.
+            c.InclusionNorm = _s.AvailabilityWindows ? (maxDens == 0 ? 0 : c.Density / maxDens)
+                            : maxIncl == 0 ? 0 : c.Inclusion / maxIncl;
             c.DensityNorm = maxDens == 0 ? 0 : c.Density / maxDens;
             c.Value = (_s.InclusionWeight * c.InclusionNorm + _s.DensityWeight * c.DensityNorm) / wSum;
             c.AvgCShrunk = (c.DecksPresent * c.AvgC + _s.ShrinkageK * meanC) / (c.DecksPresent + _s.ShrinkageK);
@@ -282,7 +361,7 @@ public sealed class MetaAnalyzer
 
         // Section quotas = median per-deck count by (mode) section, rebalanced to sum to 99.
         var perDeck = r.Decks.Select(d => cardsByDeck[d.Deck.DeckId]
-            .GroupBy(c => modeSection.TryGetValue(c.Card, out var s) ? s : Sections.Unknown)
+            .GroupBy(c => modeSection.GetValueOrDefault(c.Card, Sections.Unknown))
             .ToDictionary(g => g.Key, g => g.Sum(c => c.Qty))).ToList();
         var sections = Sections.Mainboard.Where(s => perDeck.Any(p => p.ContainsKey(s))).ToList();
         foreach (var s in sections)
@@ -305,7 +384,7 @@ public sealed class MetaAnalyzer
             int remaining = quota, f = floor;
             while (remaining > 0 && f >= 1)
             {
-                foreach (var c in pool.Where(c => c.DecksPresent >= f && !chosen.Contains(c.Card)))
+                foreach (var c in pool.Where(c => c.DecksPresent >= r.CardFloor(c, f) && !chosen.Contains(c.Card)))
                 {
                     if (remaining <= 0) break;
                     bool basic = AnalysisSettings.BasicLands.Contains(c.Card);
@@ -335,7 +414,9 @@ public sealed class MetaAnalyzer
         var parts = new List<string>
         {
             $"#{rank}/{poolSize} {section} by score",
-            $"in {c.DecksPresent}/{nDecks} decks ({c.Popularity:P0})",
+            c.IsWindowed
+                ? $"new card: available since {c.AvailableFrom:yyyy-MM-dd} ({c.AvailableSource}), in {c.DecksPresent}/{c.WindowDecks} decks since ({c.Popularity:P0})"
+                : $"in {c.DecksPresent}/{nDecks} decks ({c.Popularity:P0})",
             $"Value {c.Value:0.000}",
             $"Avg_C {c.AvgC:0.00} vs mean {meanC:0.00} ({c.AvgC - meanC:+0.00;-0.00})",
         };
@@ -358,7 +439,8 @@ public sealed class MetaAnalyzer
         {
             double score = _score[c.Card];
             string verdict, reason;
-            if (c.DecksPresent >= r.EffectiveFloor && cutoff.TryGetValue(c.Section, out var cut))
+            int cardFloor = r.CardFloor(c, r.EffectiveFloor);
+            if (c.DecksPresent >= cardFloor && cutoff.TryGetValue(c.Section, out var cut))
             {
                 verdict = "Cut (structural redundancy)";
                 reason = $"Meets the stability floor but {c.Section} slots are filled by higher-scoring cards (score {score:0.000} < cutoff {cut:0.000}).";
@@ -376,8 +458,10 @@ public sealed class MetaAnalyzer
             else
             {
                 verdict = "Cut (low support)";
-                reason = $"Below the stability floor ({c.DecksPresent} < {r.EffectiveFloor}) with no compensating Avg_C signal.";
+                reason = $"Below the stability floor ({c.DecksPresent} < {cardFloor}) with no compensating Avg_C signal.";
             }
+            if (c.IsWindowed)
+                reason += $" New card: available since {c.AvailableFrom:yyyy-MM-dd} ({c.AvailableSource}), in {c.DecksPresent}/{c.WindowDecks} decks since.";
             r.CutList.Add(new CutCard(c.Card, c.Section, verdict, c.Value, c.AvgC, c.DecksPresent, score, reason));
         }
         r.CutList.Sort((a, b) => b.Score.CompareTo(a.Score));
@@ -417,7 +501,7 @@ public sealed class MetaAnalyzer
         foreach (var s in r.SectionQuotas.Keys)
         {
             var counts = r.Decks.Select(d => (double)cardsByDeck[d.Deck.DeckId]
-                .Where(c => (modeSection.TryGetValue(c.Card, out var m) ? m : Sections.Unknown) == s).Sum(c => c.Qty)).ToList();
+                .Where(c => modeSection.GetValueOrDefault(c.Card, Sections.Unknown) == s).Sum(c => c.Qty)).ToList();
             r.Structure.Add(new StructureRow($"{s} count", Stats.Median(counts), counts.Average(),
                 r.Recommended.Where(x => x.Category == s).Sum(x => x.Qty)));
         }
@@ -439,7 +523,7 @@ public sealed class MetaAnalyzer
         var avg = r.Cards.Select(c => c.AvgC).ToList();
         s.MinAvgC = avg.Min(); s.MaxAvgC = avg.Max(); s.RangeAvgC = s.MaxAvgC - s.MinAvgC; s.SdAvgC = Stats.Sd(avg);
 
-        var stable = r.Cards.Where(c => c.DecksPresent >= r.EffectiveFloor).ToList();
+        var stable = r.Cards.Where(c => c.DecksPresent >= r.CardFloor(c, r.EffectiveFloor)).ToList();
         s.StableCards = stable.Count;
         if (stable.Count > 0)
         {

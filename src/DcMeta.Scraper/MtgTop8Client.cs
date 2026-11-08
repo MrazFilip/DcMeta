@@ -17,7 +17,6 @@ public sealed class MtgTop8Client : IDisposable
 {
     public const string Base = "https://www.mtgtop8.com/";
 
-    // MTGTop8 section header -> normalized category
     static readonly (string Header, string Category)[] SectionMap =
     {
         ("LANDS", Sections.Land),
@@ -47,7 +46,6 @@ public sealed class MtgTop8Client : IDisposable
 
     public void Dispose() => _http.Dispose();
 
-    // ------------------------------------------------------------ HTTP
     async Task<string> GetString(string url, Dictionary<string, string>? form = null)
     {
         for (int attempt = 1; ; attempt++)
@@ -68,7 +66,7 @@ public sealed class MtgTop8Client : IDisposable
             }
             catch (HttpRequestException) when (attempt < 3)
             {
-                await Task.Delay(TimeSpan.FromSeconds(5 * attempt)); // back off and retry
+                await Task.Delay(TimeSpan.FromSeconds(5 * attempt));
             }
         }
     }
@@ -82,7 +80,6 @@ public sealed class MtgTop8Client : IDisposable
 
     static string Clean(string s) => Regex.Replace(HtmlEntity.DeEntitize(s), @"\s+", " ").Trim();
 
-    // ------------------------------------------------------------ archetype list
     /// <summary>Walks the archetype listing. <paramref name="url"/> is the full archetype URL with all its filters.</summary>
     public async Task<List<DeckListing>> ListDecks(string url, int pages)
     {
@@ -122,7 +119,6 @@ public sealed class MtgTop8Client : IDisposable
         return rows;
     }
 
-    // ------------------------------------------------------------ deck page
     public async Task<(int? FieldSize, string Record, List<(int Qty, string Card, string Section)> Cards)>
         GetDeck(string eventId, string deckId)
     {

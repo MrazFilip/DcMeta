@@ -2,12 +2,6 @@ namespace DcMeta.Core.Analysis;
 
 public static class Stats
 {
-    public static double Mean(IEnumerable<double> xs)
-    {
-        var a = xs as IList<double> ?? xs.ToList();
-        return a.Count == 0 ? double.NaN : a.Average();
-    }
-
     /// <summary>Sample standard deviation (n − 1). NaN for fewer than 2 values.</summary>
     public static double Sd(IEnumerable<double> xs)
     {
@@ -25,22 +19,13 @@ public static class Stats
         return n % 2 == 1 ? a[n / 2] : (a[n / 2 - 1] + a[n / 2]) / 2.0;
     }
 
-    public static double Percentile(IEnumerable<double> xs, double p)
-    {
-        var a = xs.OrderBy(x => x).ToList();
-        if (a.Count == 0) return double.NaN;
-        double pos = (a.Count - 1) * p;
-        int lo = (int)Math.Floor(pos), hi = (int)Math.Ceiling(pos);
-        return a[lo] + (a[hi] - a[lo]) * (pos - lo);
-    }
-
     /// <summary>Welch's t statistic for two independent samples. NaN if either side has &lt; 2 values.</summary>
     public static double WelchT(IList<double> a, IList<double> b)
     {
         if (a.Count < 2 || b.Count < 2) return double.NaN;
         double va = Math.Pow(Sd(a), 2) / a.Count, vb = Math.Pow(Sd(b), 2) / b.Count;
         double se = Math.Sqrt(va + vb);
-        return se == 0 ? double.NaN : (Mean(a) - Mean(b)) / se;
+        return se == 0 ? double.NaN : (a.Average() - b.Average()) / se;
     }
 
     /// <summary>
@@ -65,7 +50,6 @@ public static class Stats
         static double Sse(List<double> xs) { double m = xs.Average(); return xs.Sum(x => (x - m) * (x - m)); }
     }
 
-    /// <summary>Plain k-means from given initial labels (deterministic). Returns final labels.</summary>
     public static int[] KMeans(IList<double[]> points, int[] initLabels, int k, int maxIter = 100)
     {
         var labels = (int[])initLabels.Clone();

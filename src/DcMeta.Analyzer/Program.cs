@@ -24,6 +24,12 @@
 //   --shrink K                 shrinkage pseudo-count for AvgC_shrunk (default 5)
 //   --high-field N             high-field recalculation threshold (default 128)
 //   --cross-delta X            |ΔAvg_C| to flag between archetypes (default 0.5 × SD of C)
+//   --new-cards                availability windows: judge each card only by decks played after its release
+//   --no-scryfall              with --new-cards: skip Scryfall, use each card's first date in the data
+//   --release-cache file.csv   Scryfall release-date cache (default %LOCALAPPDATA%/DcMeta/release_dates.csv)
+//   --window-k K               shrinkage for short windows, in decks (default 5)
+//   --window-min-decks N       a new card still needs at least N decks to be recommended (default 3)
+//   --half-life DAYS           recency weighting: a deck's weight in Value halves every DAYS days (default off)
 
 using System.Globalization;
 using System.Text;
@@ -66,8 +72,21 @@ if (opt.ContainsKey("beta")) settings.AvgCRefinement = D("beta");
 if (opt.ContainsKey("shrink")) settings.ShrinkageK = D("shrink");
 if (opt.ContainsKey("high-field")) settings.HighFieldThreshold = (int)D("high-field");
 if (opt.ContainsKey("cross-delta")) settings.CrossDeltaThreshold = D("cross-delta");
+if (opt.ContainsKey("new-cards")) settings.AvailabilityWindows = true;
+if (opt.ContainsKey("window-k")) settings.WindowShrinkK = D("window-k");
+if (opt.ContainsKey("window-min-decks")) settings.WindowMinDecks = (int)D("window-min-decks");
+if (opt.ContainsKey("half-life")) settings.RecencyHalfLifeDays = D("half-life");
 
 var data = CsvIo.Read(decksPath, cardsPath);
+
+Dictionary<string, DateOnly>? releaseDates = null;
+if (settings.AvailabilityWindows && !opt.ContainsKey("no-scryfall"))
+{
+    using var scryfall = new DcMeta.Scraper.ScryfallClient();
+    var names = data.Cards.Where(c => c.Section != Sections.Commander).Select(c => MetaAnalyzer.NormalizeName(c.Card));
+    releaseDates = scryfall.GetReleaseDates(names, opt.GetValueOrDefault("release-cache", DcMeta.Scraper.ScryfallClient.DefaultCachePath));
+}
+
 Dictionary<string, HashSet<string>>? roles = null;
 if (opt.TryGetValue("roles", out var rolesPath))
 {
@@ -75,9 +94,8 @@ if (opt.TryGetValue("roles", out var rolesPath))
     Console.WriteLine($"Loaded roles for {roles.Count} cards from {rolesPath}");
 }
 
-var result = new MetaAnalyzer(settings, roles).Run(data);
+var result = new MetaAnalyzer(settings, roles, releaseDates).Run(data);
 
-// Report title: --name, else the most common deck name in the data.
 string name = opt.GetValueOrDefault("name")
     ?? data.Decks.Where(d => d.DeckName.Length > 0).GroupBy(d => d.DeckName, StringComparer.OrdinalIgnoreCase)
            .OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault()
@@ -101,6 +119,12 @@ Console.WriteLine($"Decks: {data.Decks.Count} scraped, {result.Decks.Count} incl
 Console.WriteLine($"Cards: {result.Cards.Count} unique; Recommended 99 = {result.Recommended.Sum(x => x.Qty)} cards");
 foreach (var a in result.ArchetypeStats)
     Console.WriteLine($"  {a.Archetype,-15} {a.Decks,4} decks  avg C {a.AvgC:0.000}");
+if (settings.AvailabilityWindows)
+{
+    var newIn99 = result.Cards.Where(c => c.IsWindowed && result.Recommended.Any(x => x.Card == c.Card)).Select(c => c.Card).ToList();
+    Console.WriteLine($"New cards (newer than the oldest deck): {result.WindowedCards}; in the Recommended 99: {newIn99.Count}" +
+                      (newIn99.Count > 0 ? $" ({string.Join(", ", newIn99)})" : ""));
+}
 foreach (var note in result.RecommendedNotes) Console.WriteLine($"  note: {note}");
 Console.WriteLine($"Wrote {Path.GetFullPath(listPath)}");
 Console.WriteLine($"Wrote {Path.GetFullPath(Path.Combine(outDir, "report.md"))}");

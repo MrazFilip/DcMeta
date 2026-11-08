@@ -18,7 +18,6 @@ public static class CsvIo
 
     public static readonly string[] CardHeader = { "deck_id", "qty", "card", "section" };
 
-    // ------------------------------------------------------------------ write
     public static string Escape(object? v)
     {
         string s = v switch
@@ -56,7 +55,6 @@ public static class CsvIo
             w.WriteLine(string.Join(",", Escape(c.DeckId), Escape(c.Qty), Escape(c.Card), Escape(c.Section)));
     }
 
-    // ------------------------------------------------------------------ read
     public static List<string[]> Parse(TextReader r)
     {
         var rows = new List<string[]>();
@@ -138,7 +136,7 @@ public static class CsvIo
                 deck.PlacementBest = b; deck.PlacementWorst = w;
             }
             deck.PlacementMid ??= deck.PlacementBest is null ? null : (deck.PlacementBest + deck.PlacementWorst) / 2.0;
-            deck.RecomputeFlags(); // re-check, in case the CSV was edited by hand
+            deck.RecomputeFlags();
             return deck;
         }).ToList();
 

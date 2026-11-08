@@ -42,6 +42,24 @@ public sealed class AnalysisSettings
     /// <summary>Pseudo-count k for stability-adjusted Avg_C: (n·avg + k·mean) / (n + k).</summary>
     public double ShrinkageK { get; set; } = 5;
 
+    // ---- Availability windows (new cards)
+    /// <summary>
+    /// Measure each card only against decks dated on/after its release (Scryfall date, else the first
+    /// date it appears in the data), so a recently printed card isn't penalised for decks that predate it.
+    /// </summary>
+    public bool AvailabilityWindows { get; set; } = false;
+    /// <summary>Pseudo-count (in decks) pulling a short window's density back toward its whole-dataset density.</summary>
+    public double WindowShrinkK { get; set; } = 5;
+    /// <summary>A card with a short window still needs at least this many decks to be recommended.</summary>
+    public int WindowMinDecks { get; set; } = 3;
+
+    // ---- Recency weighting
+    /// <summary>
+    /// If set, a deck's weight in Value halves every this many days, counted back from the newest deck.
+    /// Avg_C is not affected. Null = all decks count equally.
+    /// </summary>
+    public double? RecencyHalfLifeDays { get; set; }
+
     // ---- Recommended 99
     public int StabilityFloor { get; set; } = 15;
     /// <summary>Weight of the Avg_C refinement in the selection score (Value keeps 1 − β).</summary>

@@ -45,6 +45,11 @@ public sealed class Deck
 
     public bool IsLeague => Event.Contains("league", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Event date; MTGTop8 writes dd/mm/yy. Null if missing or unreadable.</summary>
+    public DateOnly? ParsedDate =>
+        DateOnly.TryParseExact(Date.Trim(), new[] { "dd/MM/yy", "dd/MM/yyyy", "yyyy-MM-dd" },
+            System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d) ? d : null;
+
     public void RecomputeFlags()
     {
         var f = new List<string>();
@@ -65,7 +70,6 @@ public sealed class Deck
     }
 }
 
-/// <summary>Full parsed dataset: decks + one row per (deck, card).</summary>
 public sealed class Dataset
 {
     public List<Deck> Decks { get; init; } = new();

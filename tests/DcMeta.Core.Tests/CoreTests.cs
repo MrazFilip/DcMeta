@@ -199,6 +199,119 @@ public class CardMetricTests
     }
 }
 
+public class AvailabilityWindowTests
+{
+    /// <summary>
+    /// 20 equal decks on 1–20 Jan 2026. "New Bomb" is in all of the last 5 (released 16 Jan);
+    /// "Old Half" is in the first 10 (old card that fell out of favour).
+    /// </summary>
+    static Dataset Data()
+    {
+        var decks = Enumerable.Range(1, 20).Select(i =>
+        {
+            var extra = new List<(string, string)>();
+            if (i >= 16) extra.Add(("New Bomb", Sections.InstantSorcery));
+            if (i <= 10) extra.Add(("Old Half", Sections.InstantSorcery));
+            var (d, cards) = TestData.FullDeck(i.ToString(), 32, "1", 15, extra.ToArray());
+            d.Date = $"{i:00}/01/26";
+            return (d, cards);
+        }).ToArray();
+        return TestData.Build(decks);
+    }
+
+    static AnalysisResult Run(bool windows, Dictionary<string, DateOnly>? release = null) =>
+        new MetaAnalyzer(new AnalysisSettings { StabilityFloor = 10, AvailabilityWindows = windows }, releaseDates: release).Run(Data());
+
+    [Fact]
+    public void DeckDate_ParsesMtgTop8Format()
+    {
+        Assert.Equal(new DateOnly(2026, 11, 3), new Deck { Date = "03/11/26" }.ParsedDate);
+        Assert.Null(new Deck { Date = "" }.ParsedDate);
+    }
+
+    [Fact]
+    public void WithoutWindows_NewCardIsPenalised()
+    {
+        var bomb = Run(false).Cards.Single(c => c.Card == "New Bomb");
+        Assert.Equal(0.25, bomb.Popularity, 9);
+        Assert.False(bomb.IsWindowed);
+        Assert.Equal(20, bomb.WindowDecks);
+    }
+
+    [Fact]
+    public void ReleaseDate_SetsWindow_AndRaisesPopularityAndValue()
+    {
+        var off = Run(false).Cards.Single(c => c.Card == "New Bomb");
+        var r = Run(true, new() { ["New Bomb"] = new DateOnly(2026, 1, 16) });
+        var bomb = r.Cards.Single(c => c.Card == "New Bomb");
+
+        Assert.True(bomb.IsWindowed);
+        Assert.Equal(5, bomb.WindowDecks);
+        Assert.Equal("Scryfall", bomb.AvailableSource);
+        Assert.Equal(1.0, bomb.Popularity, 9);
+        // Equal C per deck: (5 + k·0.25) / (5 + k) with k = 5 → 0.625, between raw 0.25 and window 1.0.
+        Assert.Equal(0.625, bomb.Density, 9);
+        Assert.True(bomb.Value > off.Value);
+        Assert.Equal(3, r.CardFloor(bomb, 10));             // ceil(10 × 5/20) = 3
+        Assert.True(bomb.DecksPresent >= r.CardFloor(bomb, 10));
+    }
+
+    [Fact]
+    public void WithoutReleaseDate_FallsBackToFirstSeen()
+    {
+        var bomb = Run(true).Cards.Single(c => c.Card == "New Bomb");
+        Assert.Equal("first seen", bomb.AvailableSource);
+        Assert.Equal(new DateOnly(2026, 1, 16), bomb.AvailableFrom);
+        Assert.Equal(5, bomb.WindowDecks);
+    }
+
+    [Fact]
+    public void OldCards_AreUnchangedByWindows()
+    {
+        var off = Run(false).Cards.ToDictionary(c => c.Card);
+        var on = Run(true).Cards.ToDictionary(c => c.Card);
+        foreach (var name in new[] { "Old Half", "Island", "Spell 0", "Creature 0" })
+        {
+            Assert.False(on[name].IsWindowed);
+            Assert.Equal(off[name].Popularity, on[name].Popularity, 9);
+            Assert.Equal(off[name].Density, on[name].Density, 9);
+        }
+    }
+
+    static AnalysisResult RunRecency(double? halfLife) =>
+        new MetaAnalyzer(new AnalysisSettings { StabilityFloor = 10, RecencyHalfLifeDays = halfLife }).Run(Data());
+
+    [Fact]
+    public void Recency_HalvesWeightPerHalfLife()
+    {
+        var r = RunRecency(10);
+        Assert.Equal(1.0, r.Decks.Single(d => d.Deck.DeckId == "20").Recency, 9);
+        Assert.Equal(0.5, r.Decks.Single(d => d.Deck.DeckId == "10").Recency, 9);   // 10 days before the newest
+        Assert.All(r.Decks, d => Assert.Equal(d.C * d.Recency, d.W, 9));
+    }
+
+    [Fact]
+    public void Recency_ShiftsValueTowardRecentCards_ButNotAvgC()
+    {
+        var off = RunRecency(null).Cards.ToDictionary(c => c.Card);
+        var on = RunRecency(10).Cards.ToDictionary(c => c.Card);
+
+        Assert.True(on["New Bomb"].Value > off["New Bomb"].Value);   // played in the newest decks
+        Assert.True(on["Old Half"].Value < off["Old Half"].Value);   // played only in the oldest decks
+        Assert.Equal(off["New Bomb"].AvgC, on["New Bomb"].AvgC, 9);
+        Assert.Equal(off["Old Half"].AvgC, on["Old Half"].AvgC, 9);
+    }
+
+    [Fact]
+    public void ReleaseDateAfterAPlayingDeck_StillCountsThatDeck()
+    {
+        // A wrong (too late) release date must not drop decks that actually play the card.
+        var bomb = Run(true, new() { ["New Bomb"] = new DateOnly(2026, 1, 19) }).Cards.Single(c => c.Card == "New Bomb");
+        Assert.Equal(5, bomb.WindowDecks);
+        Assert.Equal(1.0, bomb.Popularity, 9);
+    }
+}
+
 public class RecommendedTests
 {
     [Fact]

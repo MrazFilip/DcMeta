@@ -28,7 +28,6 @@ public static class MarkdownReport
                       "they do not measure what a card causes.");
         md.AppendLine();
 
-        // ------------------------------------------------------------ 0. Dataset
         md.AppendLine("## 0. Dataset and metadata audit");
         md.AppendLine();
         md.AppendLine($"{nAll} decks scraped, {n} included, {nAll - n} excluded.");
@@ -50,7 +49,6 @@ public static class MarkdownReport
             return md.ToString();
         }
 
-        // ------------------------------------------------------------ 1. C
         md.AppendLine("## 1. Tournament Coefficient (C)");
         md.AppendLine();
         md.AppendLine("**Definition.** `C = ln(Field Size) × Placement Weight`.");
@@ -80,14 +78,15 @@ public static class MarkdownReport
         md.AppendLine();
         md.AppendLine($"Deck C: mean {F(s.MeanDeckC)}, SD {F(s.SdDeckC)}, min {F(s.MinDeckC)}, max {F(s.MaxDeckC)}.");
         md.AppendLine();
-        Table(md, new[] { "Deck", "Player", "Event", "Date", "Players", "ln(F)", "Rank", "Mid", "PW", "C", "Archetype" },
+        bool recency = set.RecencyHalfLifeDays is not null;
+        Table(md, new[] { "Deck", "Player", "Event", "Date", "Players", "ln(F)", "Rank", "Mid", "PW", "C", "Archetype" }
+                  .Concat(recency ? new[] { "Recency", "C×Recency" } : Array.Empty<string>()).ToArray(),
             r.Decks.OrderByDescending(d => d.C).Select(d => new object?[]
             {
                 d.Deck.DeckId, d.Deck.Player, d.Deck.Event, d.Deck.Date, d.Deck.FieldSize, d.LnField, d.Deck.RankRaw,
                 d.Deck.PlacementMid, d.PlacementWeight, d.C, d.Archetype,
-            }));
+            }.Concat(recency ? new object?[] { d.Recency, d.W } : Array.Empty<object?>()).ToArray()));
 
-        // ------------------------------------------------------------ 2. Archetypes
         md.AppendLine("## 2. Archetype identification");
         md.AppendLine();
         md.AppendLine($"**Method.** {r.ClusteringMethod}");
@@ -115,7 +114,6 @@ public static class MarkdownReport
                 d.CreatureDensity, d.SpellDensity, d.Archetype, d.Silhouette, d.Borderline ? "yes" : "", d.C,
             }));
 
-        // ------------------------------------------------------------ 3. Value
         md.AppendLine("## 3. Card Value (primary metric)");
         md.AppendLine();
         md.AppendLine("Definitions (a card is *present* in a deck if it has ≥ 1 copy):");
@@ -133,11 +131,19 @@ public static class MarkdownReport
         md.AppendLine("**Why ubiquitous cards regress toward the mean.** Inclusion = #decks_present × Avg_C. A card in nearly every deck sums C over nearly every deck, " +
                       $"so its Avg_C converges to the dataset mean ({F(s.MeanDeckC)}). It earns top Value through count, not through concentration in strong decks.");
         md.AppendLine();
+        if (set.RecencyHalfLifeDays is double hl)
+        {
+            var w = r.Decks.Select(d => d.Recency).ToList();
+            md.AppendLine($"**Recency weighting is on** (half-life {F(hl, 0)} days). In Inclusion, Density and Value every deck's C is multiplied by " +
+                          $"`0.5^(days before the newest deck / {F(hl, 0)})`, so recent results count more. Deck weights range from {F(w.Min(), 2)} (oldest) to {F(w.Max(), 2)}. " +
+                          "Avg_C, the archetype stats and the cross-archetype comparison use plain C.");
+            md.AppendLine();
+        }
+        if (set.AvailabilityWindows) NewCardsSection(md, r);
         CardTable(md, r.Cards, "### CardValueFull (all included decks)");
         CardTable(md, r.CardsCreatureBased, $"### CardValueFull_Creaturebased ({r.Decks.Count(d => d.Archetype == Archetypes.CreatureBased)} decks)");
         CardTable(md, r.CardsCreatureLight, $"### CardValueFull_Creaturelight ({r.Decks.Count(d => d.Archetype == Archetypes.CreatureLight)} decks)");
 
-        // ------------------------------------------------------------ 4. Avg_C
         md.AppendLine("## 4. Avg_C_when_present (hidden-gem lens)");
         md.AppendLine();
         md.AppendLine("`Avg_C_when_present = Inclusion / #decks_present = E[C | card present]`.");
@@ -152,7 +158,6 @@ public static class MarkdownReport
                 c.Card, c.Inclusion, c.DecksPresent, c.AvgC, c.Popularity, c.Density, c.InclusionNorm, c.DensityNorm, c.Value, c.AvgCShrunk, c.AvgCZ, c.TopExamples,
             }));
 
-        // ------------------------------------------------------------ 5. Comparison
         md.AppendLine("## 5. Value vs Avg_C_when_present");
         md.AppendLine();
         md.AppendLine($"corr(Value, Avg_C) = {F(s.CorrValueAvgC)}; corr(Popularity, Avg_C) = {F(s.CorrPopularityAvgC)}.");
@@ -162,7 +167,7 @@ public static class MarkdownReport
         md.AppendLine("- **Glue cards score lower on Avg_C.** Cantrips, fetchlands and cheap artifacts sit in almost every list, strong or weak, so their Avg_C sits near the mean by construction.");
         md.AppendLine("- **Narrow cards score higher (or lower) on Avg_C.** A card in a few lists inherits those lists' C directly; with small n, one deep run moves it a lot. Read extremes together with #decks_present and AvgC_shrunk.");
         md.AppendLine();
-        var stable = r.Cards.Where(c => c.DecksPresent >= r.EffectiveFloor).ToList();
+        var stable = r.Cards.Where(c => c.DecksPresent >= r.CardFloor(c, r.EffectiveFloor)).ToList();
         AvgCRankTable(md, $"### Top 15 by Avg_C — all cards", r.Cards.OrderByDescending(c => c.AvgC).ThenByDescending(c => c.DecksPresent).Take(15));
         AvgCRankTable(md, $"### Bottom 15 by Avg_C — all cards", r.Cards.OrderBy(c => c.AvgC).ThenByDescending(c => c.DecksPresent).Take(15));
         AvgCRankTable(md, $"### Top 15 by Avg_C — stable cards (#decks ≥ {r.EffectiveFloor})", stable.OrderByDescending(c => c.AvgC).Take(15));
@@ -182,14 +187,16 @@ public static class MarkdownReport
                 c.Card, c.Section, c.Value, valueRank[c.Card], c.AvgC, avgRank[c.Card], valueRank[c.Card] - avgRank[c.Card], c.DecksPresent,
             }));
 
-        // ------------------------------------------------------------ 6. Recommended
         md.AppendLine("## 6. Recommended 99");
         md.AppendLine();
         md.AppendLine("**Construction.**");
         md.AppendLine();
         md.AppendLine($"1. Section quotas = median per-deck count of each MTGTop8 section, rebalanced to 99: " +
                       string.Join(", ", r.SectionQuotas.Select(kv => $"{kv.Key} {kv.Value}")) + ". This keeps the dataset's typical structure.");
-        md.AppendLine($"2. Eligibility: #decks_present ≥ {r.EffectiveFloor} (stability floor; requested {set.StabilityFloor}).");
+        md.AppendLine($"2. Eligibility: #decks_present ≥ {r.EffectiveFloor} (stability floor; requested {set.StabilityFloor})." +
+                      (set.AvailabilityWindows
+                          ? $" New cards need the floor scaled to their window (floor × window decks / all decks), but at least {set.WindowMinDecks} decks."
+                          : ""));
         md.AppendLine($"3. Ranking: `score = {F(1 - set.AvgCRefinement, 2)}·Value + {F(set.AvgCRefinement, 2)}·AvgC_shrunk_norm` — Value is primary; shrunk Avg_C refines the order without letting small samples jump the queue.");
         md.AppendLine("4. Basic lands take their median copy count. If a section cannot be filled at the floor, the floor is lowered one deck at a time for that section only and the card is marked.");
         md.AppendLine();
@@ -204,7 +211,6 @@ public static class MarkdownReport
         Table(md, new[] { "Metric", "Dataset median", "Dataset mean", "Recommended 99" },
             r.Structure.Select(x => new object?[] { x.Metric, x.DatasetMedian, x.DatasetMean, x.Recommended }));
 
-        // ------------------------------------------------------------ 7. Cut list
         md.AppendLine("## 7. Cut list");
         md.AppendLine();
         md.AppendLine($"Cards played in ≥ {set.CutListMinDecks} decks that did not make the 99, sorted by selection score. " +
@@ -213,7 +219,6 @@ public static class MarkdownReport
         Table(md, new[] { "Card", "Category", "Verdict", "Value", "Avg_C", "#decks", "Score", "Reason" },
             r.CutList.Select(c => new object?[] { c.Card, c.Category, c.Verdict, c.Value, c.AvgC, c.DecksPresent, c.Score, c.Reason }));
 
-        // ------------------------------------------------------------ 8. Cross
         md.AppendLine("## 8. Cross-archetype analysis");
         md.AppendLine();
         md.AppendLine($"Avg_C is recomputed inside each archetype. A difference is flagged when both sides have ≥ {set.CrossMinDecksPerSide} decks and |Δ| ≥ {F(r.CrossThresholdUsed)} " +
@@ -227,7 +232,6 @@ public static class MarkdownReport
         md.AppendLine();
         CrossTable(md, r.Cross);
 
-        // ------------------------------------------------------------ 9. Stats
         md.AppendLine("## 9. Statistical interpretation");
         md.AppendLine();
         md.AppendLine($"**Spread.** Across all {r.Cards.Count} cards, Avg_C runs from {F(s.MinAvgC)} to {F(s.MaxAvgC)} (range {F(s.RangeAvgC)}, SD {F(s.SdAvgC)}). " +
@@ -252,7 +256,6 @@ public static class MarkdownReport
                       "Estimating a marginal effect would need controlled comparisons (same pilot, one-card swaps) that this dataset does not contain.");
         md.AppendLine();
 
-        // ------------------------------------------------------------ 10. Advanced
         md.AppendLine("## 10. Advanced");
         md.AppendLine();
         md.AppendLine("- **Z-score of Avg_C** — `AvgC_z` column in sections 3–4.");
@@ -272,15 +275,36 @@ public static class MarkdownReport
         return md.ToString();
     }
 
-    // ------------------------------------------------------------ helpers
     static string ExtremesNote(AnalysisResult r)
     {
         var ext = r.Cards.OrderByDescending(c => c.AvgC).Take(10)
             .Concat(r.Cards.OrderBy(c => c.AvgC).Take(10)).ToList();
-        int small = ext.Count(c => c.DecksPresent < r.EffectiveFloor);
+        int small = ext.Count(c => c.DecksPresent < r.CardFloor(c, r.EffectiveFloor));
         return small == 0
             ? "All of the 10 highest and 10 lowest Avg_C cards meet the stability floor, so the extremes are not small-sample artefacts."
             : $"{small} of the 10 highest and 10 lowest Avg_C cards are below the stability floor ({r.EffectiveFloor} decks); those extremes mostly reflect small samples.";
+    }
+
+    static void NewCardsSection(StringBuilder md, AnalysisResult r)
+    {
+        var set = r.Settings;
+        md.AppendLine("### Availability windows (new cards)");
+        md.AppendLine();
+        md.AppendLine("A card printed recently could not appear in older decks, so it is measured only against decks dated on or after its release " +
+                      "(earliest printing on Scryfall; if unknown, the first date it appears in this data). For those cards:");
+        md.AppendLine();
+        md.AppendLine("- `Popularity = #decks_present / window decks`");
+        md.AppendLine($"- `Density = (Inclusion + k·mean C·Density_all) / (Σ C in window + k·mean C)` with k = {F(set.WindowShrinkK, 1)} — the window's density, pulled toward the whole-dataset density so a short window is trusted less");
+        md.AppendLine("- `Inclusion_norm` uses window-projected inclusion (Density × Σ C), so with windows on `Inclusion_norm = Density_norm` and Value reflects the adjusted density. Raw `Inclusion` is still shown unadjusted.");
+        md.AppendLine();
+        var newCards = r.Cards.Where(c => c.IsWindowed).OrderByDescending(c => c.Value).ToList();
+        if (newCards.Count == 0) { md.AppendLine("_No card is newer than the oldest deck._"); md.AppendLine(); return; }
+        Table(md, new[] { "Card", "Section", "Available from", "Source", "#decks", "Window decks", "Popularity", "Density", "Value", "Floor needed", "In 99" },
+            newCards.Select(c => new object?[]
+            {
+                c.Card, c.Section, c.AvailableFrom?.ToString("yyyy-MM-dd"), c.AvailableSource, c.DecksPresent, c.WindowDecks,
+                c.Popularity, c.Density, c.Value, r.CardFloor(c, r.EffectiveFloor), r.Recommended.Any(x => x.Card == c.Card) ? "yes" : "",
+            }));
     }
 
     static void CardTable(StringBuilder md, List<CardMetric> cards, string title)

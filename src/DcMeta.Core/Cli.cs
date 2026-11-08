@@ -1,6 +1,5 @@
 namespace DcMeta.Core;
 
-/// <summary>Tiny "--key value" / "--flag" argument parser shared by both executables.</summary>
 public static class Cli
 {
     public static Dictionary<string, string> Parse(string[] args)

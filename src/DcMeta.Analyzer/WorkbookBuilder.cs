@@ -6,13 +6,6 @@ namespace DcMeta.Analyzer;
 /// <summary>Maps an <see cref="AnalysisResult"/> onto the workbook sheets the Master Prompt requires.</summary>
 public static class WorkbookBuilder
 {
-    public static readonly string[] RequiredSheets =
-    {
-        "Raw_Parsed_Decks", "Metadata_Audit", "Tournament_Coefficients", "Archetype_Split",
-        "Archetype_Coefficients", "CardValueFull", "CardValueFull_Creaturebased", "CardValueFull_Creaturelight",
-        "Card_AvgC_when_present", "Recommended_99", "Cut_List", "Cross_Archetype_Comparison",
-    };
-
     static double? N(double v) => double.IsNaN(v) ? null : v;
 
     public static List<Sheet> Build(AnalysisResult r)
@@ -20,7 +13,6 @@ public static class WorkbookBuilder
         var sheets = new List<Sheet>();
         var scored = r.Decks.ToDictionary(d => d.Deck.DeckId);
 
-        // 1. Raw_Parsed_Decks
         var raw = new Sheet("Raw_Parsed_Decks", CsvIo.DeckHeader.Concat(new[] { "cards_listed" }).ToArray());
         var cardsByDeck = r.Data.Cards.ToLookup(c => c.DeckId);
         foreach (var d in r.Data.Decks)
@@ -30,7 +22,6 @@ public static class WorkbookBuilder
                     string.Join("; ", cardsByDeck[d.DeckId].Select(c => $"{c.Qty} {c.Card}")));
         sheets.Add(raw);
 
-        // 2. Metadata_Audit
         var audit = new Sheet("Metadata_Audit", "deck_id", "player", "event", "date", "field_size", "rank_raw",
                               "n_mainboard", "flags", "included", "reason");
         foreach (var a in r.Audit)
@@ -38,15 +29,13 @@ public static class WorkbookBuilder
                       a.Deck.NMainboard, a.Deck.Flags, a.Included, a.Reason);
         sheets.Add(audit);
 
-        // 3. Tournament_Coefficients
         var tc = new Sheet("Tournament_Coefficients", "deck_id", "player", "event", "date", "field_size", "ln_field_size",
-                           "rank_raw", "placement_mid", "placement_weight", "C", "archetype");
+                           "rank_raw", "placement_mid", "placement_weight", "C", "archetype", "recency_weight", "C_x_recency");
         foreach (var d in r.Decks.OrderByDescending(d => d.C))
             tc.Add(d.Deck.DeckId, d.Deck.Player, d.Deck.Event, d.Deck.Date, d.Deck.FieldSize, d.LnField, d.Deck.RankRaw,
-                   d.Deck.PlacementMid, d.PlacementWeight, d.C, d.Archetype);
+                   d.Deck.PlacementMid, d.PlacementWeight, d.C, d.Archetype, d.Recency, d.W);
         sheets.Add(tc);
 
-        // 4. Archetype_Split
         var split = new Sheet("Archetype_Split", "deck_id", "player", "event", "n_creatures", "n_instant_sorcery",
                               "n_other_spells", "n_lands", "creature_density", "spell_density", "interaction_density",
                               "velocity_density", "archetype", "silhouette", "borderline", "C");
@@ -56,7 +45,6 @@ public static class WorkbookBuilder
                       d.VelocityDensity, d.Archetype, d.Silhouette, d.Borderline, d.C);
         sheets.Add(split);
 
-        // 5. Archetype_Coefficients
         var ac = new Sheet("Archetype_Coefficients", "archetype", "decks", "representation_pct", "avg_C", "sd_C", "median_C",
                            "total_C", "mean_creatures", "sd_creatures", "min_creatures", "max_creatures",
                            "mean_spell_density", "mean_interaction_density", "mean_velocity_density",
@@ -67,12 +55,11 @@ public static class WorkbookBuilder
                    a.MeanSilhouette, a.BorderlinePct);
         sheets.Add(ac);
 
-        // 6-8. CardValueFull (+ archetype subsets)
         sheets.Add(CardValueSheet("CardValueFull", r.Cards));
         sheets.Add(CardValueSheet("CardValueFull_Creaturebased", r.CardsCreatureBased));
         sheets.Add(CardValueSheet("CardValueFull_Creaturelight", r.CardsCreatureLight));
 
-        // 9. Card_AvgC_when_present (mandatory columns first, extras after)
+        // Mandatory columns first, extras after
         var avg = new Sheet("Card_AvgC_when_present", "Card", "Inclusion", "#decks_present", "Avg_C_when_present",
                             "Popularity", "Density", "Inclusion_norm", "Density_norm", "Value", "decks_topC_examples",
                             "Section", "AvgC_shrunk", "AvgC_z");
@@ -81,7 +68,6 @@ public static class WorkbookBuilder
                     c.Value, c.TopExamples, c.Section, c.AvgCShrunk, c.AvgCZ);
         sheets.Add(avg);
 
-        // 10. Recommended_99
         var rec = new Sheet("Recommended_99", "Card", "Category", "Qty", "Value", "Avg_C_when_present", "AvgC_shrunk",
                             "#decks_present", "Selection_score", "Floor_used", "Reason_for_Inclusion");
         foreach (var x in r.Recommended)
@@ -89,14 +75,12 @@ public static class WorkbookBuilder
         rec.Add("TOTAL", "", r.Recommended.Sum(x => x.Qty), null, null, null, null, null, null, "");
         sheets.Add(rec);
 
-        // 11. Cut_List
         var cut = new Sheet("Cut_List", "Card", "Category", "Verdict", "Value", "Avg_C_when_present", "#decks_present",
                             "Selection_score", "Reason");
         foreach (var c in r.CutList)
             cut.Add(c.Card, c.Category, c.Verdict, c.Value, c.AvgC, c.DecksPresent, c.Score, c.Reason);
         sheets.Add(cut);
 
-        // 12. Cross_Archetype_Comparison
         var cross = new Sheet("Cross_Archetype_Comparison", "Card", "Section", "#decks_creature_based",
                               "AvgC_creature_based", "#decks_creature_light", "AvgC_creature_light",
                               "Delta_CB_minus_CL", "Welch_t", "Significant", "Note");
@@ -105,7 +89,7 @@ public static class WorkbookBuilder
                       x.Delta, x.WelchT, x.Significant, x.Note);
         sheets.Add(cross);
 
-        // ---- Extras
+        // Extras beyond the 12 required sheets
         var st = new Sheet("Structural_Check", "Metric", "Dataset_median", "Dataset_mean", "Recommended_99");
         foreach (var s in r.Structure) st.Add(s.Metric, s.DatasetMedian, s.DatasetMean, s.Recommended);
         sheets.Add(st);
@@ -131,10 +115,11 @@ public static class WorkbookBuilder
     {
         var s = new Sheet(name, "Card", "Section", "Inclusion", "Density", "Popularity", "#decks_present",
                           "Inclusion_norm", "Density_norm", "Value", "Avg_C_when_present", "AvgC_shrunk", "AvgC_z",
-                          "Median_qty", "decks_topC_examples");
+                          "Median_qty", "decks_topC_examples", "Window_decks", "Available_from", "Available_source");
         foreach (var c in cards)
             s.Add(c.Card, c.Section, c.Inclusion, c.Density, c.Popularity, c.DecksPresent, c.InclusionNorm, c.DensityNorm,
-                  c.Value, c.AvgC, c.AvgCShrunk, c.AvgCZ, c.MedianQty, c.TopExamples);
+                  c.Value, c.AvgC, c.AvgCShrunk, c.AvgCZ, c.MedianQty, c.TopExamples,
+                  c.WindowDecks, c.AvailableFrom?.ToString("yyyy-MM-dd"), c.AvailableSource);
         return s;
     }
 
@@ -170,6 +155,7 @@ public static class WorkbookBuilder
         yield return ("Creature threshold used", r.CreatureThresholdUsed);
         yield return ("Cross-archetype Δ threshold", r.CrossThresholdUsed);
         yield return ($"High-field decks (≥ {r.Settings.HighFieldThreshold} players)", r.HighFieldDecks);
+        if (r.Settings.AvailabilityWindows) yield return ("Cards newer than the oldest deck (windowed)", r.WindowedCards);
     }
 
     public static IEnumerable<(string, object?)> SettingsRows(AnalysisResult r)
@@ -188,6 +174,13 @@ public static class WorkbookBuilder
         yield return ("Inclusion weight", s.InclusionWeight);
         yield return ("Density weight", s.DensityWeight);
         yield return ("Shrinkage k", s.ShrinkageK);
+        yield return ("Recency half-life (days)", s.RecencyHalfLifeDays?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "off");
+        yield return ("Availability windows (new cards)", s.AvailabilityWindows);
+        if (s.AvailabilityWindows)
+        {
+            yield return ("  window shrinkage k", s.WindowShrinkK);
+            yield return ("  min decks for a new card", s.WindowMinDecks);
+        }
         yield return ("Stability floor (requested)", s.StabilityFloor);
         yield return ("Stability floor (effective)", r.EffectiveFloor);
         yield return ("Avg_C refinement β", s.AvgCRefinement);

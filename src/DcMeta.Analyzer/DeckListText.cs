@@ -10,20 +10,10 @@ namespace DcMeta.Analyzer;
 /// </summary>
 public static class DeckListText
 {
-    static readonly string[] Order = { Sections.Creature, Sections.InstantSorcery, Sections.Other, Sections.Land, Sections.Unknown };
-
-    public static string Build(IEnumerable<RecommendedCard> cards) =>
-        string.Concat(cards
-            .OrderBy(c => Rank(c.Category))
-            .ThenBy(c => c.Card, StringComparer.OrdinalIgnoreCase)
-            .Select(c => $"{c.Qty} {c.Card}\n"));
-
-    static int Rank(string category)
-    {
-        int i = Array.IndexOf(Order, category);
-        return i < 0 ? Order.Length : i;
-    }
-
+    // Categories always come from Sections.Mainboard, so IndexOf never misses.
     public static void Write(string path, IEnumerable<RecommendedCard> cards) =>
-        File.WriteAllText(path, Build(cards), new UTF8Encoding(false));
+        File.WriteAllText(path, string.Concat(cards
+            .OrderBy(c => Array.IndexOf(Sections.Mainboard, c.Category))
+            .ThenBy(c => c.Card, StringComparer.OrdinalIgnoreCase)
+            .Select(c => $"{c.Qty} {c.Card}\n")), new UTF8Encoding(false));
 }

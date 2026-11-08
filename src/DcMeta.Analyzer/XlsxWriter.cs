@@ -19,7 +19,7 @@ public sealed class Sheet
     public string[] Headers { get; }
     public List<object?[]> Rows { get; } = new();
 
-    public Sheet Add(params object?[] cells) { Rows.Add(cells); return this; }
+    public void Add(params object?[] cells) => Rows.Add(cells);
 }
 
 /// <summary>
