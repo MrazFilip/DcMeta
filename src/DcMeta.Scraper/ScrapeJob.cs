@@ -33,7 +33,7 @@ public static class ScrapeJob
             }
             catch (Exception e)
             {
-                Console.WriteLine($"  failed: {e.Message}");
+                Term.Error($"  failed: {e.Message}");
                 continue;
             }
             if (fieldSize is null && fieldCache.TryGetValue(l.EventId, out var cached)) fieldSize = cached;
@@ -66,10 +66,10 @@ public static class ScrapeJob
         CsvIo.WriteCards(Path.Combine(outDir, "cards_long.csv"), cards);
         WriteDatasetText(Path.Combine(outDir, "dataset.txt"), decks, cards);
 
-        Console.WriteLine($"\nSaved {decks.Count} decks, {cards.Select(c => c.Card).Distinct().Count()} unique cards to {Path.GetFullPath(outDir)}");
-        Console.WriteLine("Flag summary:");
+        Term.Ok($"\nSaved {decks.Count} decks, {cards.Select(c => c.Card).Distinct().Count()} unique cards to {Path.GetFullPath(outDir)}");
+        Term.Info("Flag summary:");
         foreach (var g in decks.GroupBy(d => d.Flags == "" ? "ok" : d.Flags).OrderByDescending(g => g.Count()))
-            Console.WriteLine($"  {g.Count(),4}  {g.Key}");
+            (g.Key == "ok" ? (Action<string>)Term.Ok : Term.Warn)($"  {g.Count(),4}  {g.Key}");
     }
 
     /// <summary>LLM-friendly block: one header per deck, cards grouped by type.</summary>

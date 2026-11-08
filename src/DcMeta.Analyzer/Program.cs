@@ -51,14 +51,14 @@ if (opt.TryGetValue("url", out var url))
     }
     catch (ArgumentException e)
     {
-        Console.Error.WriteLine(e.Message);
+        Term.Error(e.Message);
         return 1;
     }
 }
 
 string decksPath = Path.Combine(dataDir, "decks.csv"), cardsPath = Path.Combine(dataDir, "cards_long.csv");
 foreach (var p in new[] { decksPath, cardsPath })
-    if (!File.Exists(p)) { Console.Error.WriteLine($"Missing input: {Path.GetFullPath(p)}. Run DcMeta.Scraper first."); return 1; }
+    if (!File.Exists(p)) { Term.Error($"Missing input: {Path.GetFullPath(p)}. Run DcMeta.Scraper first."); return 1; }
 
 var settings = new AnalysisSettings();
 double D(string k) => double.Parse(opt[k], CultureInfo.InvariantCulture);
@@ -91,7 +91,7 @@ Dictionary<string, HashSet<string>>? roles = null;
 if (opt.TryGetValue("roles", out var rolesPath))
 {
     roles = CsvIo.ReadRoles(rolesPath);
-    Console.WriteLine($"Loaded roles for {roles.Count} cards from {rolesPath}");
+    Term.Info($"Loaded roles for {roles.Count} cards from {rolesPath}");
 }
 
 var result = new MetaAnalyzer(settings, roles, releaseDates).Run(data);
@@ -115,18 +115,18 @@ if (roles is null && result.Cards.Count > 0)
         w.WriteLine($"{CsvIo.Escape(c.Card)},{CsvIo.Escape(c.Section)},{c.DecksPresent},");
 }
 
-Console.WriteLine($"Decks: {data.Decks.Count} scraped, {result.Decks.Count} included");
-Console.WriteLine($"Cards: {result.Cards.Count} unique; Recommended 99 = {result.Recommended.Sum(x => x.Qty)} cards");
+Term.Info($"Decks: {data.Decks.Count} scraped, {result.Decks.Count} included");
+Term.Info($"Cards: {result.Cards.Count} unique; Recommended 99 = {result.Recommended.Sum(x => x.Qty)} cards");
 foreach (var a in result.ArchetypeStats)
     Console.WriteLine($"  {a.Archetype,-15} {a.Decks,4} decks  avg C {a.AvgC:0.000}");
 if (settings.AvailabilityWindows)
 {
     var newIn99 = result.Cards.Where(c => c.IsWindowed && result.Recommended.Any(x => x.Card == c.Card)).Select(c => c.Card).ToList();
-    Console.WriteLine($"New cards (newer than the oldest deck): {result.WindowedCards}; in the Recommended 99: {newIn99.Count}" +
+    Term.Info($"New cards (newer than the oldest deck): {result.WindowedCards}; in the Recommended 99: {newIn99.Count}" +
                       (newIn99.Count > 0 ? $" ({string.Join(", ", newIn99)})" : ""));
 }
-foreach (var note in result.RecommendedNotes) Console.WriteLine($"  note: {note}");
-Console.WriteLine($"Wrote {Path.GetFullPath(listPath)}");
-Console.WriteLine($"Wrote {Path.GetFullPath(Path.Combine(outDir, "report.md"))}");
-Console.WriteLine($"Wrote {Path.GetFullPath(Path.Combine(outDir, "analysis.xlsx"))}");
+foreach (var note in result.RecommendedNotes) Term.Warn($"  note: {note}");
+Term.Ok($"Wrote {Path.GetFullPath(listPath)}");
+Term.Ok($"Wrote {Path.GetFullPath(Path.Combine(outDir, "report.md"))}");
+Term.Ok($"Wrote {Path.GetFullPath(Path.Combine(outDir, "analysis.xlsx"))}");
 return 0;

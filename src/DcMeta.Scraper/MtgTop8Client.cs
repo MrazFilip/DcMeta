@@ -113,7 +113,7 @@ public sealed class MtgTop8Client : IDisposable
                 rows.Add(new DeckListing(deckId, eventId, C(1), C(2), C(3), level, C(5), C(6)));
                 found++;
             }
-            Console.WriteLine($"page {page}: {found} decks");
+            Term.Dim($"page {page}: {found} decks");
             if (found == 0) break;
         }
         return rows;

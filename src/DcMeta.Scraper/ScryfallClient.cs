@@ -43,11 +43,13 @@ public sealed class ScryfallClient : IDisposable
 
         if (todo.Count > 0)
         {
-            Console.WriteLine($"Scryfall: looking up release dates for {todo.Count} cards (cached in {cachePath})");
+            Term.Info($"Scryfall: looking up release dates for {todo.Count} cards (cached in {cachePath})");
             var failed = new List<string>();
             string? error = null;
 
             // 1) Batched exact-name searches: many cards per request, every printing oldest first.
+            int done = 0;
+            Term.Progress("exact ", 0, todo.Count);
             foreach (var chunk in Chunks(todo))
             {
                 try
@@ -56,20 +58,23 @@ public sealed class ScryfallClient : IDisposable
                         cache[card] = date;
                 }
                 catch (Exception e) when (IsTransient(e)) { failed.AddRange(chunk); error ??= e.Message; }
+                Term.Progress("exact ", done += chunk.Count, todo.Count);
             }
+            Term.ProgressEnd();
 
             // 2) Cards the exact search didn't match (e.g. MTGTop8 lists one face of a double-faced card):
             //    fuzzy name → oracle id → earliest printing. Not found at all = cached as unknown.
             var missing = todo.Where(c => !cache.ContainsKey(c) && !failed.Contains(c)).ToList();
-            if (missing.Count > 0) Console.WriteLine($"  {missing.Count} cards need a fuzzy lookup");
-            foreach (var card in missing)
+            for (int i = 0; i < missing.Count; i++)
             {
-                try { cache[card] = FuzzyLookup(card).GetAwaiter().GetResult(); }
-                catch (Exception e) when (IsTransient(e)) { failed.Add(card); error ??= e.Message; }
+                Term.Progress("fuzzy ", i, missing.Count);
+                try { cache[missing[i]] = FuzzyLookup(missing[i]).GetAwaiter().GetResult(); }
+                catch (Exception e) when (IsTransient(e)) { failed.Add(missing[i]); error ??= e.Message; }
             }
+            if (missing.Count > 0) { Term.Progress("fuzzy ", missing.Count, missing.Count); Term.ProgressEnd(); }
 
             if (failed.Count > 0)
-                Console.WriteLine($"  {failed.Count} lookups failed ({error}); those cards fall back to their first-seen date and are retried next run.");
+                Term.Warn($"  {failed.Count} lookups failed ({error}); those cards fall back to their first-seen date and are retried next run.");
             WriteCache(cachePath, cache);
         }
 

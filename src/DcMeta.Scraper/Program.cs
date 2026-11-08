@@ -12,7 +12,7 @@ using DcMeta.Scraper;
 var opt = Cli.Parse(args);
 if (!opt.TryGetValue("url", out var url))
 {
-    Console.Error.WriteLine("Usage: --url \"https://www.mtgtop8.com/archetype?a=...&meta=...&f=EDH\" [--out data] [--pages 50]");
+    Term.Error("Usage: --url \"https://www.mtgtop8.com/archetype?a=...&meta=...&f=EDH\" [--out data] [--pages 50]");
     return 1;
 }
 
@@ -27,6 +27,6 @@ try
 }
 catch (ArgumentException e)
 {
-    Console.Error.WriteLine(e.Message);
+    Term.Error(e.Message);
     return 1;
 }
