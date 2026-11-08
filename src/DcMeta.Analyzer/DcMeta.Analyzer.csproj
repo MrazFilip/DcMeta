@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>DcMeta.Analyzer</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DcMeta.Core\DcMeta.Core.csproj" />
+    <ProjectReference Include="..\DcMeta.Scraper\DcMeta.Scraper.csproj" />
+  </ItemGroup>
+</Project>
